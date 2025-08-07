@@ -7,11 +7,12 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // ===== Step chờ trước khi phân loại =====
 const waitInputStep = createStep({
   id: "wait-input",
-  inputSchema: z.object({ input: z.string() }),
+  inputSchema: z.object({ input: z.string().describe("Yêu cầu từ người dùng") }),
   outputSchema: z.object({ input: z.string() }),
   execute: async ({ inputData }) => {
     console.log("inputData tại wait-input:", inputData);
     if (!inputData?.input) {
+      console.error("[wait-input] inputData:", inputData);
       throw new Error("[wait-input] Thiếu input");
     }
 
@@ -24,8 +25,14 @@ const waitInputStep = createStep({
 // ===== Step chờ sau khi phân loại =====
 const waitPostClassifyStep = createStep({
   id: "wait-post-classify",
-  inputSchema: z.object({ category: z.string(), input: z.string() }),
-  outputSchema: z.object({ category: z.string(), input: z.string() }),
+  inputSchema: z.object({
+    category: z.string().describe("Phân loại"),
+    input: z.string().describe("Yêu cầu gốc"),
+  }),
+  outputSchema: z.object({
+    category: z.string(),
+    input: z.string(),
+  }),
   execute: async ({ inputData }) => {
     if (!inputData?.input || !inputData?.category) {
       throw new Error("[wait-post-classify] Thiếu input hoặc category");
@@ -40,8 +47,11 @@ const waitPostClassifyStep = createStep({
 // ===== Step phân loại =====
 const classifyStep = createStep({
   id: "classify",
-  inputSchema: z.object({ input: z.string() }),
-  outputSchema: z.object({ category: z.string(), input: z.string() }),
+  inputSchema: z.object({ input: z.string().describe("Yêu cầu từ người dùng") }),
+  outputSchema: z.object({
+    category: z.string(),
+    input: z.string(),
+  }),
   execute: async ({ inputData, mastra }) => {
     const input = inputData?.input?.trim();
     if (!input) {
@@ -88,10 +98,12 @@ Trả lời (chỉ một từ):
 const routeStep = createStep({
   id: "route",
   inputSchema: z.object({
-    category: z.string(),
-    input: z.string(),
+    category: z.string().describe("Danh mục yêu cầu"),
+    input: z.string().describe("Nội dung yêu cầu gốc"),
   }),
-  outputSchema: z.object({ output: z.string() }),
+  outputSchema: z.object({
+    output: z.string().describe("Phản hồi từ agent phù hợp"),
+  }),
   execute: async ({ inputData, mastra }) => {
     const { category, input } = inputData;
 
@@ -117,7 +129,12 @@ const routeStep = createStep({
       targetAgent.generate([{ role: "user", content: input }])
     );
 
-    const text = res?.outputs?.[0]?.text?.trim() ?? "";
+    console.log(`[route] Full agent response:`, JSON.stringify(res, null, 2));
+
+    const text =
+      res?.text?.trim() ||
+      "[route] Không có phản hồi từ agent";
+
     console.log(`[route] Trả lời từ agent: ${text}`);
 
     return { output: text };
@@ -127,8 +144,12 @@ const routeStep = createStep({
 // ===== Tổng workflow =====
 export const masterWorkflow = createWorkflow({
   id: "master-workflow",
-  inputSchema: z.object({ input: z.string() }),
-  outputSchema: z.object({ output: z.string() }),
+  inputSchema: z.object({
+    input: z.string().describe("Tin nhắn người dùng"),
+  }),
+  outputSchema: z.object({
+    output: z.string().describe("Phản hồi cuối cùng gửi người dùng"),
+  }),
 })
   .then(waitInputStep)
   .then(classifyStep)

@@ -2,6 +2,7 @@ import { openai } from '@ai-sdk/openai';
 import { Agent } from '@mastra/core/agent';
 import { Memory } from '@mastra/memory';
 import { LibSQLStore } from '@mastra/libsql';
+import { shopTool } from '../tools/shop-tool';
 
 export const shopAgent = new Agent({
   name: 'Shop Agent',
@@ -89,7 +90,7 @@ User: “Hôm nay trời mưa không?”
 `,
   model: openai('gpt-4o-mini'),
   tools: {
-    // product_search: async ({ query }) => { ... } // implement your product search logic here
+    "shop-tool": shopTool,
   },
   memory: new Memory({
     storage: new LibSQLStore({

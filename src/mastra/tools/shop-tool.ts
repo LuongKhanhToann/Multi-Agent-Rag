@@ -3,6 +3,9 @@ import { z } from "zod";
 import { openai } from "@ai-sdk/openai";
 import { embed } from "ai";
 import { Client } from 'pg';
+import dotenv from "dotenv";
+
+dotenv.config(); 
 
 // ---- Interface định nghĩa row kết quả ----
 interface ProductEmbeddingRow {
@@ -15,7 +18,7 @@ interface ProductEmbeddingRow {
 
 // ---- Kết nối PostgreSQL trực tiếp ----
 const dbClient = new Client({
-  connectionString: "postgresql://innovision:innovision_2025@123.31.39.246:5432/innovision_ai_agent",
+  connectionString: process.env.DATABASE_URL,
 });
 
 // Kết nối database

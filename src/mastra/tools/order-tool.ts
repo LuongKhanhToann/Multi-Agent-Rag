@@ -1,6 +1,9 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { Client } from 'pg';
+import dotenv from "dotenv";
+
+dotenv.config(); 
 
 // ---- Interface định nghĩa các response ----
 interface CustomerResponse {
@@ -31,7 +34,7 @@ interface OrderDetailResponse {
 
 // ---- Kết nối PostgreSQL trực tiếp ----
 const dbClient = new Client({
-  connectionString: "postgresql://innovision:innovision_2025@123.31.39.246:5432/innovision_ai_agent",
+  connectionString: process.env.DATABASE_URL,
 });
 
 // Kết nối database

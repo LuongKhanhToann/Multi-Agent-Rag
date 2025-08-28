@@ -16,8 +16,8 @@ const waitInputStep = createStep({
       throw new Error("[wait-input] Thiếu input");
     }
 
-    console.log("[wait-input] Waiting 35s before classify...");
-    await delay(35000);
+    console.log("[wait-input] Waiting 10s before classify...");
+    await delay(10);
     return inputData;
   },
 });
@@ -38,8 +38,8 @@ const waitPostClassifyStep = createStep({
       throw new Error("[wait-post-classify] Thiếu input hoặc category");
     }
 
-    console.log("[wait-post-classify] Waiting 35s before routing...");
-    await delay(35000);
+    console.log("[wait-post-classify] Waiting 10 before routing...");
+    await delay(10000);
     return inputData;
   },
 });
@@ -59,16 +59,22 @@ const classifyStep = createStep({
     }
 
     const prompt = `
-Bạn là một AI phân loại yêu cầu. Hãy đọc nội dung sau và phân loại nó thành một trong bốn danh mục sau:
-- "shop" nếu liên quan đến sản phẩm, cửa hàng
-- "order-place" nếu người dùng muốn đặt hàng
-- "order-status" nếu người dùng muốn kiểm tra đơn hàng, tra cứu tình trạng giao hàng
-- "chat" nếu không thuộc ba nhóm trên
+Bạn là một AI phân loại yêu cầu của người dùng.  
+Nhiệm vụ của bạn: đọc kỹ câu yêu cầu và xác định chính xác nó thuộc **một trong bốn danh mục duy nhất sau**:
 
-Chỉ trả về duy nhất một từ: "shop", "order-place", "order-status", hoặc "chat".
-Yêu cầu: "${input}"
+1. "shop" → Nếu người dùng hỏi về sản phẩm, thương hiệu, giá cả, khuyến mãi, kích cỡ, hương vị, tình trạng còn hàng hoặc các thông tin liên quan đến cửa hàng.
+2. "order_place" → Nếu người dùng muốn đặt hàng, thêm sản phẩm vào giỏ, hoặc cung cấp thông tin (tên, địa chỉ, số điện thoại, số lượng, phương thức thanh toán) để tạo đơn hàng.
+3. "order_status" → Nếu người dùng muốn kiểm tra, tra cứu, theo dõi tình trạng đơn hàng đã đặt (ví dụ: tiến độ, đã giao chưa, mã đơn, thời gian giao hàng).
+4. "chat" → Nếu câu hỏi/trao đổi không liên quan đến ba loại trên (ví dụ: thời tiết, chào hỏi, trò chuyện chung, thông tin ngoài cửa hàng).
+
+##Quy tắc bắt buộc:
+- Luôn chọn **chính xác một nhãn** trong bốn danh mục trên.
+- Trả về **chỉ duy nhất một từ**: "shop", "order_place", "order_status", hoặc "chat".  
+- Không thêm lời giải thích hay ký tự khác.
+
+Yêu cầu của người dùng: "${input}"  
 Trả lời (chỉ một từ):
-    `.trim();
+`.trim();
 
     const rawAgent = mastra.getAgent("masterAgent");
     if (!rawAgent || typeof rawAgent.generate !== "function") {
@@ -83,7 +89,7 @@ Trả lời (chỉ một từ):
       res?.outputs?.[0]?.text?.trim().toLowerCase() ||
       res?.text?.trim().toLowerCase() || "";
 
-    const validCategories = ["shop", "order-place", "order-status", "chat"];
+    const validCategories = ["shop", "order_place", "order_status", "chat"];
     const category = validCategories.includes(rawText) ? rawText : "chat";
 
     console.log(`[classify] Kết quả phân loại: ${category}`);
@@ -113,8 +119,8 @@ const routeStep = createStep({
 
     const agentMap = {
       shop: "shopAgent",
-      "order-place": "orderAgent",
-      "order-status": "orderStatusAgent",
+      order_place: "orderAgent",
+      order_status: "orderStatusAgent",
       chat: "chatAgent",
     };
 

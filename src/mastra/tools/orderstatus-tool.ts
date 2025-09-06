@@ -1,53 +1,71 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { Client } from 'pg';
 
-// ---- Tool để kiểm tra đơn hàng ----
-export const getOrderTool = createTool({
-  id: "get-order-tool",
-  description: "Lấy thông tin đơn hàng theo ID",
+export const orderStatusTool = createTool({
+  id: "order-status-tool",
+  description: "Tra cứu đơn hàng theo số điện thoại và sản phẩm",
   inputSchema: z.object({
-    orderId: z.number().describe("ID của đơn hàng cần tra cứu"),
+    phone: z.string().describe("Số điện thoại khách hàng"),
+    productId: z.number().describe("ID sản phẩm cần tra cứu"),
   }),
   outputSchema: z.object({
     success: z.boolean(),
     message: z.string(),
-    order: z.any().optional(),
+    orders: z
+      .array(
+        z.object({
+          id: z.number(),
+          total_price: z.number(),
+          discount: z.number().nullable().optional(),
+          status: z.string(),
+          phone_number: z.string(),
+          customerId: z.number(),
+          created_at: z.string(),
+          updated_at: z.string(),
+          customer: z.any().optional(),
+          orderDetails: z.any().optional(),
+          payments: z.any().optional(),
+        })
+      )
+      .optional(),
     error: z.string().optional(),
   }),
   execute: async ({ context }) => {
-    const { orderId } = context;
+    const { phone, productId } = context;
+    const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:3000";
 
     try {
-      const response = await fetch(`http://localhost:3000/orders/${orderId}`);
-      
-      if (!response.ok) {
-        if (response.status === 404) {
+      const res = await fetch(
+        `${API_BASE_URL}/orders/search?phoneNumber=${encodeURIComponent(phone)}&productId=${productId}`
+      );
+
+      if (!res.ok) {
+        if (res.status === 404) {
           return {
             success: false,
-            message: `Không tìm thấy đơn hàng với ID: ${orderId}`,
-            error: "Order not found",
+            message: "Không tìm thấy đơn hàng cho thông tin đã cung cấp",
+            orders: [],
           };
         }
-        
-        const errorText = await response.text();
-        throw new Error(`Lỗi khi lấy đơn hàng: ${response.status} - ${errorText}`);
+        const errorText = await res.text();
+        throw new Error(`API error: ${res.status} - ${errorText}`);
       }
 
-      const order = await response.json();
-      
+      const data = await res.json();
+      const orders = data.orders || [];
+
       return {
         success: true,
-        message: "Lấy thông tin đơn hàng thành công",
-        order: order,
+        message: "Tra cứu đơn hàng thành công",
+        orders,
       };
     } catch (error) {
-      console.error("Lỗi trong get order tool:", error);
-      
+      console.error("❌ Lỗi trong orderStatusTool:", error);
       return {
         success: false,
-        message: "Không thể lấy thông tin đơn hàng",
+        message: "Không thể tra cứu đơn hàng",
         error: error instanceof Error ? error.message : "Lỗi không xác định",
+        orders: [],
       };
     }
   },

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Client } from 'pg';
 import dotenv from "dotenv";
 
-dotenv.config(); 
+dotenv.config();
 
 // ---- Interface định nghĩa các response ----
 interface CustomerResponse {
@@ -20,6 +20,7 @@ interface OrderResponse {
   discount?: number;
   status: string;
   customer?: any;
+  phone_number?: string;
   orderDetails?: any[];
 }
 
@@ -34,7 +35,7 @@ interface OrderDetailResponse {
 
 // ---- Kết nối PostgreSQL trực tiếp ----
 const dbClient = new Client({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.PG_DATABASE_URL,
 });
 
 // Kết nối database
@@ -44,7 +45,7 @@ dbClient.connect().catch(console.error);
 export const orderTool = createTool({
   id: "order-tool",
   description:
-    "Tạo đơn hàng mới bao gồm thông tin customer, order và chi tiết đơn hàng",
+    "Tạo đơn hàng mới bao gồm thông tin customer, order và nhiều chi tiết đơn hàng",
   inputSchema: z.object({
     // Thông tin khách hàng
     customer: z.object({
@@ -53,13 +54,19 @@ export const orderTool = createTool({
       address: z.string().describe("Địa chỉ khách hàng"),
     }),
     
-    // Thông tin đơn hàng và sản phẩm
+    // Thông tin đơn hàng và danh sách sản phẩm
     order: z.object({
       discount: z.number().optional().describe("Giảm giá (%)"),
       status: z.string().default("pending").describe("Trạng thái đơn hàng"),
-      productId: z.number().describe("ID sản phẩm từ RAG search"),
-      quantity: z.number().describe("Số lượng"),
-      price: z.number().describe("Giá sản phẩm"),
+      phone_number: z.string().describe("Số điện thoại"),
+      paymentMethodId: z.number().describe("ID phương thức thanh toán: 1 = tiền mặt, 2 = chuyển khoản"),
+      products: z.array(
+        z.object({
+          productId: z.number().describe("ID sản phẩm từ RAG search"),
+          quantity: z.number().describe("Số lượng"),
+          price: z.number().describe("Giá sản phẩm"),
+        })
+      ).describe("Danh sách sản phẩm trong đơn hàng"),
     }),
   }),
   
@@ -80,12 +87,21 @@ export const orderTool = createTool({
         discount: z.number().optional(),
         status: z.string(),
       }).optional(),
-      orderDetail: z.object({
+      orderDetails: z.array(
+        z.object({
+          id: z.number(),
+          orderId: z.number(),
+          productId: z.number(),
+          quantity: z.number(),
+          price: z.number(),
+        })
+      ).optional(),
+      payment: z.object({
         id: z.number(),
         orderId: z.number(),
-        productId: z.number(),
-        quantity: z.number(),
-        price: z.number(),
+        paymentMethodId: z.number(),
+        amount: z.number(),
+        status: z.string(),
       }).optional(),
     }).optional(),
     error: z.string().optional(),
@@ -98,11 +114,13 @@ export const orderTool = createTool({
     let createdIds: {
       customerId: number | null;
       orderId: number | null;
-      orderDetailId: number | null;
+      orderDetailIds: number[];
+      orderPaymentId: number | null;
     } = {
       customerId: null,
       orderId: null,
-      orderDetailId: null
+      orderDetailIds: [],
+      orderPaymentId: null
     };
 
     try {
@@ -130,6 +148,7 @@ export const orderTool = createTool({
       const orderPayload = {
         customerId: customerData.id,
         discount: order.discount || 0,
+        phone_number: order.phone_number,
         status: order.status || "pending",
       };
 
@@ -150,37 +169,68 @@ export const orderTool = createTool({
       createdIds.orderId = orderData.id;
       console.log("Tạo order thành công:", orderData);
 
-      // B3: Tạo chi tiết đơn hàng
-      console.log("Đang tạo order detail...");
-      const orderDetailPayload = {
-        orderId: orderData.id,
-        productId: order.productId,
-        quantity: order.quantity,
-      };
+      // B3: Tạo nhiều chi tiết đơn hàng
+      console.log("Đang tạo order details...");
+      const orderDetailsData: OrderDetailResponse[] = [];
+      for (const product of order.products) {
+        const orderDetailPayload = {
+          orderId: orderData.id,
+          productId: product.productId,
+          quantity: product.quantity,
+          price: product.price
+        };
 
-      const orderDetailResponse = await fetch("http://localhost:3000/order-details", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(orderDetailPayload),
-      });
+        const orderDetailResponse = await fetch("http://localhost:3000/order-details", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(orderDetailPayload),
+        });
 
-      if (!orderDetailResponse.ok) {
-        const errorText = await orderDetailResponse.text();
-        throw new Error(`Lỗi tạo order detail: ${orderDetailResponse.status} - ${errorText}`);
+        if (!orderDetailResponse.ok) {
+          const errorText = await orderDetailResponse.text();
+          throw new Error(`Lỗi tạo order detail: ${orderDetailResponse.status} - ${errorText}`);
+        }
+
+        const orderDetailData: OrderDetailResponse = await orderDetailResponse.json();
+        createdIds.orderDetailIds.push(orderDetailData.id);
+        orderDetailsData.push(orderDetailData);
+        console.log("Tạo order detail thành công:", orderDetailData);
       }
-
-      const orderDetailData: OrderDetailResponse = await orderDetailResponse.json();
-      createdIds.orderDetailId = orderDetailData.id;
-      console.log("Tạo order detail thành công:", orderDetailData);
 
       // Lấy thông tin order đã được cập nhật total_price
       const updatedOrderResponse = await fetch(`http://localhost:3000/orders/${orderData.id}`);
       if (updatedOrderResponse.ok) {
         const updatedOrder = await updatedOrderResponse.json();
-        orderData.total_price = updatedOrder.total_price;
+        orderData.total_price = updatedOrder.total_price || order.products.reduce(
+          (sum, product) => sum + product.price * product.quantity, 0
+        );
       }
+
+      // B4: Tạo thanh toán cho đơn hàng với paymentMethodId từ input
+      const orderPaymentPayload = {
+        orderId: orderData.id,
+        paymentMethodId: order.paymentMethodId,
+        amount: orderData.total_price,
+        status: "pending",
+      };
+
+      const orderPaymentResponse = await fetch("http://localhost:3000/orders/payments", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(orderPaymentPayload),
+      });
+
+      if (!orderPaymentResponse.ok) {
+        const errorText = await orderPaymentResponse.text();
+        throw new Error(`Lỗi tạo order payment: ${orderPaymentResponse.status} - ${errorText}`);
+      }
+
+      const orderPaymentData = await orderPaymentResponse.json();
+      createdIds.orderPaymentId = orderPaymentData.id;
 
       // Trả về kết quả thành công
       return {
@@ -200,12 +250,19 @@ export const orderTool = createTool({
             discount: orderData.discount,
             status: orderData.status,
           },
-          orderDetail: {
-            id: orderDetailData.id,
-            orderId: orderDetailData.orderId,
-            productId: orderDetailData.productId,
-            quantity: orderDetailData.quantity,
-            price: orderDetailData.price,
+          orderDetails: orderDetailsData.map(detail => ({
+            id: detail.id,
+            orderId: detail.orderId,
+            productId: detail.productId,
+            quantity: detail.quantity,
+            price: detail.price,
+          })),
+          payment: {
+            id: orderPaymentData.id,
+            orderId: orderPaymentData.orderId,
+            paymentMethodId: orderPaymentData.paymentMethodId,
+            amount: orderPaymentData.amount,
+            status: orderPaymentData.status,
           },
         },
       };
@@ -216,13 +273,25 @@ export const orderTool = createTool({
       // Cleanup: Xóa các records đã tạo theo thứ tự ngược lại
       console.log("Đang thực hiện cleanup...");
       
-      // Xóa order detail nếu đã tạo
-      if (createdIds.orderDetailId) {
+      // Xóa order payment nếu đã tạo
+      if (createdIds.orderPaymentId) {
         try {
-          await fetch(`http://localhost:3000/order-details/${createdIds.orderDetailId}`, {
+          await fetch(`http://localhost:3000/orders/payments/${createdIds.orderPaymentId}`, {
+            method: "DELETE",
+          });
+          console.log("Đã xóa order payment:", createdIds.orderPaymentId);
+        } catch (cleanupError) {
+          console.error("Lỗi cleanup order payment:", cleanupError);
+        }
+      }
+
+      // Xóa order details nếu đã tạo
+      for (const orderDetailId of createdIds.orderDetailIds) {
+        try {
+          await fetch(`http://localhost:3000/order-details/${orderDetailId}`, {
             method: "DELETE"
           });
-          console.log("Đã xóa order detail:", createdIds.orderDetailId);
+          console.log("Đã xóa order detail:", orderDetailId);
         } catch (cleanupError) {
           console.error("Lỗi cleanup order detail:", cleanupError);
         }

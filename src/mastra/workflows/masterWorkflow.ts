@@ -1,164 +1,309 @@
+// ===== Master Workflow Using Mastra Memory Package =====
 import { createStep, createWorkflow } from "@mastra/core/workflows";
+import { Memory } from "@mastra/memory";
+import { LibSQLStore } from "@mastra/libsql";
 import { z } from "zod";
-import { retryRequest } from "../retryHelper";
 
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+// ===== Setup Mastra Memory =====
+const setupMemory = () => {
+  return new Memory({
+    storage: new LibSQLStore({
+      url: process.env.MEMORY_DB_URL || "file:./memory.db",
+    }),
+    options: {
+      semanticRecall: { 
+        topK: 5, 
+        messageRange: 10 
+      },
+      workingMemory: { 
+        enabled: true 
+      },
+    },
+  });
+};
 
-// ===== Step chờ trước khi phân loại =====
-const waitInputStep = createStep({
-  id: "wait-input",
-  inputSchema: z.object({ input: z.string().describe("Yêu cầu từ người dùng") }),
-  outputSchema: z.object({ input: z.string() }),
-  execute: async ({ inputData }) => {
-    console.log("inputData tại wait-input:", inputData);
-    if (!inputData?.input) {
-      console.error("[wait-input] inputData:", inputData);
-      throw new Error("[wait-input] Thiếu input");
-    }
+// Singleton memory instance
+let memoryInstance: Memory | null = null;
+const getMemory = () => {
+  if (!memoryInstance) {
+    memoryInstance = setupMemory();
+  }
+  return memoryInstance;
+};
 
-    console.log("[wait-input] Waiting 10s before classify...");
-    await delay(10);
-    return inputData;
-  },
-});
-
-// ===== Step chờ sau khi phân loại =====
-const waitPostClassifyStep = createStep({
-  id: "wait-post-classify",
+// ===== Step 1: AI Classification (Direct & Simple) =====
+const classifyIntentStep = createStep({
+  id: "classify-intent",
   inputSchema: z.object({
-    category: z.string().describe("Phân loại"),
-    input: z.string().describe("Yêu cầu gốc"),
+    input: z.string().default(""),
+    sessionId: z.string().default("default"),
+    userId: z.string().default("user"),
   }),
   outputSchema: z.object({
-    category: z.string(),
     input: z.string(),
-  }),
-  execute: async ({ inputData }) => {
-    if (!inputData?.input || !inputData?.category) {
-      throw new Error("[wait-post-classify] Thiếu input hoặc category");
-    }
-
-    console.log("[wait-post-classify] Waiting 10 before routing...");
-    await delay(10000);
-    return inputData;
-  },
-});
-
-// ===== Step phân loại =====
-const classifyStep = createStep({
-  id: "classify",
-  inputSchema: z.object({ input: z.string().describe("Yêu cầu từ người dùng") }),
-  outputSchema: z.object({
-    category: z.string(),
-    input: z.string(),
+    sessionId: z.string(),
+    userId: z.string(),
+    category: z.enum(["shop", "order_place", "order_status", "chat"]),
+    confidence: z.number(),
   }),
   execute: async ({ inputData, mastra }) => {
-    const input = inputData?.input?.trim();
-    if (!input) {
-      throw new Error("[classify] Input rỗng");
+    const { input, sessionId, userId } = inputData;
+    
+    if (!input?.trim()) {
+      return {
+        input: "",
+        sessionId,
+        userId,
+        category: "chat" as const,
+        confidence: 0.1,
+      };
     }
 
-    const prompt = `
-Bạn là một AI phân loại yêu cầu của người dùng.  
-Nhiệm vụ của bạn: đọc kỹ câu yêu cầu và xác định chính xác nó thuộc **một trong bốn danh mục duy nhất sau**:
+    const classificationPrompt = `
+Phân loại ý định của khách hàng vào một trong các danh mục sau:
 
-1. "shop" → Nếu người dùng hỏi về sản phẩm, thương hiệu, giá cả, khuyến mãi, kích cỡ, hương vị, tình trạng còn hàng hoặc các thông tin liên quan đến cửa hàng.
-2. "order_place" → Nếu người dùng muốn đặt hàng, thêm sản phẩm vào giỏ, hoặc cung cấp thông tin (tên, địa chỉ, số điện thoại, số lượng, phương thức thanh toán) để tạo đơn hàng.
-3. "order_status" → Nếu người dùng muốn kiểm tra, tra cứu, theo dõi tình trạng đơn hàng đã đặt (ví dụ: tiến độ, đã giao chưa, mã đơn, thời gian giao hàng).
-4. "chat" → Nếu câu hỏi/trao đổi không liên quan đến ba loại trên (ví dụ: thời tiết, chào hỏi, trò chuyện chung, thông tin ngoài cửa hàng).
+- shop: Tìm hiểu sản phẩm, so sánh, duyệt danh mục
+- order_place: Muốn đặt hàng, mua sản phẩm cụ thể  
+- order_status: Hỏi về đơn hàng đã đặt, theo dõi giao hàng
+- chat: Chào hỏi, trò chuyện thông thường
 
-##Quy tắc bắt buộc:
-- Luôn chọn **chính xác một nhãn** trong bốn danh mục trên.
-- Trả về **chỉ duy nhất một từ**: "shop", "order_place", "order_status", hoặc "chat".  
-- Không thêm lời giải thích hay ký tự khác.
+INPUT: ${input}
 
-Yêu cầu của người dùng: "${input}"  
-Trả lời (chỉ một từ):
-`.trim();
+Trả lời chỉ một từ: shop/order_place/order_status/chat`;
 
-    const rawAgent = mastra.getAgent("masterAgent");
-    if (!rawAgent || typeof rawAgent.generate !== "function") {
-      throw new Error("[classify] Không tìm thấy masterAgent");
+    try {
+      const masterAgent = mastra?.getAgent("masterAgent");
+      if (!masterAgent) {
+        throw new Error("Master agent not found");
+      }
+
+      const response = await masterAgent.generate([
+        { role: "user", content: classificationPrompt }
+      ]);
+
+      const result = response?.text?.trim().toLowerCase() || "chat";
+      const validCategories = ["shop", "order_place", "order_status", "chat"] as const;
+      const category = validCategories.includes(result as any) ? result as any : "chat";
+      
+      console.log(`[classify] "${input}" → ${category}`);
+      
+      return {
+        input: input.trim(),
+        sessionId,
+        userId,
+        category,
+        confidence: 0.8,
+      };
+
+    } catch (error) {
+      console.error("[classify] AI failed, using fallback:", error);
+      
+      // Simple fallback based on keywords
+      const lowerInput = input.toLowerCase();
+      let category: "shop" | "order_place" | "order_status" | "chat" = "chat";
+      
+      if (lowerInput.includes("mua") || lowerInput.includes("đặt")) {
+        category = "order_place";
+      } else if (lowerInput.includes("đơn hàng") || lowerInput.includes("giao hàng")) {
+        category = "order_status";
+      } else if (lowerInput.includes("sản phẩm") || lowerInput.includes("giá")) {
+        category = "shop";
+      }
+      
+      return {
+        input: input.trim(),
+        sessionId,
+        userId,
+        category,
+        confidence: 0.4,
+      };
     }
-
-    const res = await retryRequest(() =>
-      rawAgent.generate([{ role: "user", content: prompt }])
-    );
-
-    const rawText =
-      res?.outputs?.[0]?.text?.trim().toLowerCase() ||
-      res?.text?.trim().toLowerCase() || "";
-
-    const validCategories = ["shop", "order_place", "order_status", "chat"];
-    const category = validCategories.includes(rawText) ? rawText : "chat";
-
-    console.log(`[classify] Kết quả phân loại: ${category}`);
-    return {
-      category,
-      input,
-    };
   },
 });
 
-// ===== Step định tuyến đến agent phù hợp =====
-const routeStep = createStep({
-  id: "route",
+// ===== Step 2: Route to Agent with Mastra Memory =====
+const routeWithMemoryStep = createStep({
+  id: "route-with-memory",
   inputSchema: z.object({
-    category: z.string().describe("Danh mục yêu cầu"),
-    input: z.string().describe("Nội dung yêu cầu gốc"),
+    input: z.string(),
+    sessionId: z.string(),
+    userId: z.string(),
+    category: z.enum(["shop", "order_place", "order_status", "chat"]),
+    confidence: z.number(),
   }),
   outputSchema: z.object({
-    output: z.string().describe("Phản hồi từ agent phù hợp"),
+    input: z.string(),
+    output: z.string(),
+    agentUsed: z.string(),
+    category: z.string(),
+    processingTime: z.number(),
+    memoryUsed: z.boolean(),
   }),
   execute: async ({ inputData, mastra }) => {
-    const { category, input } = inputData;
+    const startTime = Date.now();
+    const { input, sessionId, userId, category } = inputData;
 
-    if (!category || !input) {
-      throw new Error("[route] Thiếu input hoặc category");
-    }
-
-    const agentMap = {
+    // Agent routing map
+    const agentMap: Record<string, string> = {
       shop: "shopAgent",
-      order_place: "orderAgent",
+      order_place: "orderAgent", 
       order_status: "orderStatusAgent",
       chat: "chatAgent",
     };
 
-    const agentId = agentMap[category] || "chatAgent";
-    const targetAgent = mastra.getAgent(agentId);
+    const targetAgentId = agentMap[category] || "chatAgent";
+    
+    try {
+      const targetAgent = mastra?.getAgent(targetAgentId);
+      if (!targetAgent) {
+        throw new Error(`Agent ${targetAgentId} not found`);
+      }
 
-    if (!targetAgent || typeof targetAgent.generate !== "function") {
-      throw new Error(`[route] Agent '${agentId}' không hợp lệ`);
+      // Use Mastra Memory for conversation context
+      const response = await targetAgent.generate(input, {
+        memory: {
+          resource: userId, // Use userId as resource identifier
+          thread: { id: sessionId }, // Use sessionId as thread identifier
+        },
+      });
+
+      const output = response?.text?.trim() || "Xin lỗi, tôi không thể trả lời lúc này.";
+      const processingTime = Date.now() - startTime;
+
+      console.log(`[route-memory] Used ${targetAgentId} for ${category} in ${processingTime}ms with memory`);
+
+      return {
+        input,
+        output,
+        agentUsed: targetAgentId,
+        category,
+        processingTime,
+        memoryUsed: true,
+      };
+
+    } catch (error) {
+      console.error(`[route-memory] Error with ${targetAgentId}:`, error);
+      
+      // Fallback to chat agent without memory
+      try {
+        const chatAgent = mastra?.getAgent("chatAgent");
+        if (chatAgent) {
+          const response = await chatAgent.generate([
+            { role: "user", content: input }
+          ]);
+          const output = response?.text || "Xin lỗi, hệ thống đang gặp sự cố.";
+          
+          return {
+            input,
+            output,
+            agentUsed: "chatAgent (fallback)",
+            category,
+            processingTime: Date.now() - startTime,
+            memoryUsed: false,
+          };
+        }
+      } catch (fallbackError) {
+        console.error("[route-memory] Fallback failed:", fallbackError);
+      }
+
+      const emergencyResponse = "Xin lỗi, hệ thống đang gặp sự cố. Vui lòng thử lại sau.";
+      
+      return {
+        input,
+        output: emergencyResponse,
+        agentUsed: "error-fallback",
+        category,
+        processingTime: Date.now() - startTime,
+        memoryUsed: false,
+      };
     }
-
-    const res = await retryRequest(() =>
-      targetAgent.generate([{ role: "user", content: input }])
-    );
-
-    console.log(`[route] Full agent response:`, JSON.stringify(res, null, 2));
-
-    const text =
-      res?.text?.trim() ||
-      "[route] Không có phản hồi từ agent";
-
-    console.log(`[route] Trả lời từ agent: ${text}`);
-
-    return { output: text };
   },
 });
 
-// ===== Tổng workflow =====
+// ===== Step 3: Format Response =====
+const formatResponseStep = createStep({
+  id: "format-response",
+  inputSchema: z.object({
+    input: z.string(),
+    output: z.string(),
+    agentUsed: z.string(),
+    category: z.string(),
+    processingTime: z.number(),
+    memoryUsed: z.boolean(),
+  }),
+  outputSchema: z.object({
+    input: z.string(),
+    output: z.string(),
+    metadata: z.object({
+      agentUsed: z.string(),
+      category: z.string(),
+      processingTime: z.number(),
+      memoryUsed: z.boolean(),
+      timestamp: z.string(),
+      responseId: z.string(),
+    }),
+  }),
+  execute: async ({ inputData }) => {
+    const { input, output, agentUsed, category, processingTime, memoryUsed } = inputData;
+    return {
+      input,
+      output,
+      metadata: {
+        agentUsed,
+        category,
+        processingTime,
+        memoryUsed,
+        timestamp: new Date().toISOString(),
+        responseId: `resp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      },
+    };
+  },
+});
+
+// ===== Master Workflow with Mastra Memory =====
 export const masterWorkflow = createWorkflow({
   id: "master-workflow",
   inputSchema: z.object({
-    input: z.string().describe("Tin nhắn người dùng"),
+    input: z.string().default(""),
+    sessionId: z.string().default("default"),
+    userId: z.string().default("user"),
   }),
   outputSchema: z.object({
-    output: z.string().describe("Phản hồi cuối cùng gửi người dùng"),
+    input: z.string(),
+    output: z.string(),
+    metadata: z.object({
+      agentUsed: z.string(),
+      category: z.string(),
+      processingTime: z.number(),
+      memoryUsed: z.boolean(),
+      timestamp: z.string(),
+      responseId: z.string(),
+    }),
   }),
 })
-  .then(waitInputStep)
-  .then(classifyStep)
-  .then(waitPostClassifyStep)
-  .then(routeStep)
-  .commit();
+.then(classifyIntentStep)
+.then(routeWithMemoryStep)
+.then(formatResponseStep)
+.commit();
+
+// // ===== Agent Configuration with Memory =====
+export const createAgentsWithMemory = () => {
+  const memory = getMemory();
+  
+  return {
+    // Memory configuration for each agent
+    memoryConfig: {
+      memory, // Pass to agent configurations
+    },
+    
+    // Helper to create agent with memory
+    createAgentWithMemory: (agentConfig: any) => ({
+      ...agentConfig,
+      memory,
+    }),
+  };
+};
+
+
+// Export memory instance
+export { getMemory };

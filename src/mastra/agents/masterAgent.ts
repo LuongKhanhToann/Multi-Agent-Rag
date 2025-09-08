@@ -7,6 +7,7 @@ import { masterWorkflow } from '../workflows/masterWorkflow';
 import { shopTool } from '../tools/shop-tool';
 import { orderTool } from '../tools/order-tool';
 import { orderStatusTool } from '../tools/orderstatus-tool';
+import { feedbackTool } from '../tools/feedback-tool';
 
 export const masterAgent = new Agent({
   name: 'Master Agent',
@@ -37,8 +38,13 @@ You must analyze both the immediate user request AND the conversation history to
    - Phone number  
    - Detailed delivery address  
 3. Ask for the payment method (COD / Bank transfer).  
-4. Summarize the entire order (product, quantity, price, customer information, payment method).  
-5. Only create the order after the customer has confirmed.  
+4. Summarize the entire order (product, quantity, customer information, payment method).  
+5. Only create the order after the customer has confirmed. 
+6. After successful order creation, collect feedback:
+  - Rating (required): Ask for 1-5 stars
+  - Comment (optional): Ask for additional feedback
+  - Type (required): A=order_process, B=product, C=customer_service, D=other
+  - Thank customer and complete process
 
 **ORDER_STATUS** - Existing order inquiries, tracking, modifications, cancellations
 - Keywords: "đơn hàng", "mã đơn", "tracking", "hủy", "sửa", "giao chưa", order IDs
@@ -144,6 +150,7 @@ Remember: Your accuracy in understanding context and intent directly impacts cus
       shopTool,    
       orderTool,
       orderStatusTool,    
+      feedbackTool,
     },
   workflows: {
     "master-workflow": masterWorkflow,

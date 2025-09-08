@@ -265,6 +265,7 @@ export const orderTool = createTool({
             status: orderPaymentData.status,
           },
         },
+        nextPrompt: "Cảm ơn bạn đã đặt hàng! 🎉 Vui lòng cho chúng tôi biết cảm nhận về dịch vụ của chúng tôi để có thể phục vụ quý khách tốt hơn:\n- ⭐ Rating (1-5):\n- ✍️ Comment (tùy chọn):\n- 📌 Type (dịch vụ đặt hàng, chất lượng sản phẩm, dịch vụ hỗ trợ khách hàng, ...)\n\nXin cảm ơn bạn!"
       };
 
     } catch (error) {

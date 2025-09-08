@@ -10,10 +10,11 @@ import { chatAgent } from './agents/chat-agent';
 import { orderAgent } from './agents/order-agent';
 import { shopAgent } from './agents/shop-agent';
 import { orderStatusAgent } from './agents/orderstatus-agent';
+import { feedbackAgent } from './agents/feedback-agent';
 
 export const mastra = new Mastra({
   workflows: { "master-workflow": masterWorkflow },
-  agents: { weatherAgent, masterAgent, chatAgent, orderAgent, shopAgent, orderStatusAgent },
+  agents: { weatherAgent, masterAgent, chatAgent, orderAgent, shopAgent, orderStatusAgent, feedbackAgent },
   storage: new LibSQLStore({
     // stores telemetry, evals, ... into memory storage, if it needs to persist, change to file:../mastra.db
     url: ":memory:",
